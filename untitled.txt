@@ -1,0 +1,130 @@
+from telegram import Update
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+import sqlite3
+import re
+
+# ডাটাবেজ সেটআপ
+def setup_db():
+    conn = sqlite3.connect('users.db')
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            phone_number TEXT,
+            email TEXT,
+            balance REAL DEFAULT 0,
+            referral_code TEXT,
+            referred_by TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+# /start কমান্ডের জন্য ফাংশন
+def start(update: Update, context: CallbackContext):
+    update.message.reply_text("স্বাগতম! সাইন আপ করতে, আপনার ফোন নাম্বার এবং ইমেইল এড্রেস দিন (যেমন: +8801XXXXXXXXX email@example.com)।")
+
+# ব্যবহারকারী রেজিস্ট্রেশন করার ফাংশন
+def register(update: Update, context: CallbackContext):
+    message = update.message.text
+    phone_email = message.split(' ')
+
+    if len(phone_email) == 2 and re.match(r"^\+?\d{10,15}$", phone_email[0]) and re.match(r"[^@]+@[^@]+\.[^@]+", phone_email[1]):
+        phone = phone_email[0]
+        email = phone_email[1]
+        user_id = update.message.from_user.id
+
+        conn = sqlite3.connect('users.db')
+        c = conn.cursor()
+        c.execute("INSERT OR REPLACE INTO users (user_id, phone_number, email) VALUES (?, ?, ?)", (user_id, phone, email))
+        conn.commit()
+        conn.close()
+
+        update.message.reply_text(f"রেজিস্ট্রেশন সফল! আপনি এখন ফোন নাম্বার: {phone} এবং ইমেইল: {email} দিয়ে রেজিস্টার হয়েছেন।")
+    else:
+        update.message.reply_text("দয়া করে একটি সঠিক ফোন নাম্বার এবং ইমেইল দিন।")
+
+# ইউজারের তথ্য দেখতে
+def get_user_info(update: Update, context: CallbackContext):
+    user_id = update.message.from_user.id
+    conn = sqlite3.connect('users.db')
+    c = conn.cursor()
+
+    # ইউজারের তথ্য বের করার জন্য SQL ক্যুয়েরি
+    c.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+    user_info = c.fetchone()
+
+    if user_info:
+        phone_number = user_info[1]
+        email = user_info[2]
+        balance = user_info[3]
+        referral_code = user_info[4]
+        referred_by = user_info[5]
+
+        update.message.reply_text(f"User Info:\nPhone Number: {phone_number}\nEmail: {email}\nBalance: {balance} BDT\nReferral Code: {referral_code}\nReferred By: {referred_by}")
+    else:
+        update.message.reply_text("No user information found.")
+
+    conn.close()
+
+# টাকা তোলার ফাংশন
+def withdraw(update: Update, context: CallbackContext):
+    user_id = update.message.from_user.id
+    conn = sqlite3.connect('users.db')
+    c = conn.cursor()
+
+    c.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+    balance = c.fetchone()
+
+    if balance and balance[0] >= 10:  # টাকা তোলার জন্য মিনিমাম ১০ টাকা
+        update.message.reply_text("দয়া করে আপনার বিকাশ/নগদ নম্বর এবং টাকা পরিমাণ (যেমন: 1234567890 50) দিন।")
+    else:
+        update.message.reply_text("আপনার পর্যাপ্ত ব্যালেন্স নেই।")
+
+# ইউজার যখন টাকা তোলার জন্য রিকোয়েস্ট করবে
+def process_withdrawal(update: Update, context: CallbackContext):
+    user_id = update.message.from_user.id
+    conn = sqlite3.connect('users.db')
+    c = conn.cursor()
+
+    # ইউজার থেকে বিকাশ/নগদ নম্বর এবং পরিমাণ নেয়া
+    message = update.message.text.split(' ')
+    if len(message) == 2 and message[0].isdigit() and message[1].isdigit():
+        phone_number = message[0]
+        amount = float(message[1])
+
+        c.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+        balance = c.fetchone()
+
+        if balance and balance[0] >= amount:
+            # মানে ইউজারের কাছে যথেষ্ট ব্যালেন্স রয়েছে
+            new_balance = balance[0] - amount
+            c.execute("UPDATE users SET balance = ? WHERE user_id = ?", (new_balance, user_id))
+            conn.commit()
+            conn.close()
+
+            # ম্যানুয়াল চেক প্রক্রিয়া
+            # এখানে আপনি একটি ম্যানুয়াল চেক পাবেন এবং পেমেন্ট প্রক্রিয়া নিশ্চিত করতে পারবেন।
+            update.message.reply_text(f"{amount} টাকা আপনার বিকাশ/নগদ নম্বরে পাঠানো হয়েছে। চেক করুন এবং নিশ্চিত করুন।")
+        else:
+            update.message.reply_text("আপনার ব্যালেন্স পর্যাপ্ত নয়।")
+    else:
+        update.message.reply_text("অনুগ্রহ করে সঠিক নম্বর এবং পরিমাণ দিন।")
+
+# টেলিগ্রাম বট সেটআপ
+def main():
+    updater = Updater('7694635233:AAECe3XTViLV6U9Ka8VdYTQPRk_m_Sxy-NQ', use_context=True)
+
+    dp = updater.dispatcher
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, register))
+    dp.add_handler(CommandHandler("userinfo", get_user_info))
+    dp.add_handler(CommandHandler("withdraw", withdraw))
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, process_withdrawal))
+
+    updater.start_polling()
+    updater.idle()
+
+if __name__ == '__main__':
+    setup_db()
+    main()
